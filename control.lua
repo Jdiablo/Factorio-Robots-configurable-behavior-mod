@@ -41,6 +41,10 @@ local function add_entity_to_chest(entity, chest)
   local inv = chest.get_inventory(defines.inventory.chest)
   if not inv then return false end
 
+  local prototype_exists = game.item_prototypes[entity.name];
+
+  if prototype_exists == nil then return false end
+
   local existing_count = inv.get_item_count(entity.name)
   if existing_count > 0 then return false end
 
