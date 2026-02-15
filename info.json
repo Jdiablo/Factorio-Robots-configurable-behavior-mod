@@ -1,0 +1,9 @@
+{
+  "name": "robots-configurable-behavior",
+  "version": "0.0.1",
+  "title": "Robots Configurable Behavior",
+  "author": "Jay-D",
+  "factorio_version": "1.1",
+  "dependencies": ["base >= 1.1"],
+  "description": "Makes construction robots deliver mined or deconstructed items to the nearest storage chest. Toggle in Settings → Mod settings (runtime)."
+}
