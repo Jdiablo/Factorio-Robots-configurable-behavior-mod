@@ -1,25 +1,70 @@
 --[[
   Robots Configurable Behavior
-  Redirects construction robots to drop mined/deconstructed items at the nearest
-  storage chest instead of the destination chosen by the logistic network.
-  Uses the "re-delivery" method: after a robot picks up items we force it to
-  re-evaluate its drop-off so it seeks the closest valid storage.
+  Makes construction robots deliver mined/deconstructed items to the nearest
+  storage chest. Since the game API does not allow changing a robot's destination,
+  we do "manual delivery": take the robot's cargo and insert it into the nearest
+  storage chest(s), then clear the robot (it will fly to its original target with
+  empty cargo and then go idle).
 ]]
 
-local REDIRECT_DELAY_TICKS = 2  -- Wait for game to assign destination, then clear it
+local DELAY_TICKS = 1  -- Wait for items to move from event buffer into robot_cargo
 
 local function is_redirect_enabled()
   local s = settings.global["robots-configurable-behavior-redirect-to-nearest-storage"]
   return s and s.value
 end
 
-local function force_robot_to_nearest_storage(robot)
-  if not robot or not robot.valid then return end
-  -- Re-delivery method: toggle active so the robot drops its current task and
-  -- recalculates; it will then seek the closest storage chest for its cargo.
-  robot.active = false
-  robot.active = true
-  if not ok and err then log("Robots Configurable Behavior: could not toggle robot active: " .. tostring(err)) end
+--- Find storage chests in the robot's network, sorted by distance from position.
+local function get_storages_sorted_by_distance(network, from_position)
+  if not network or not network.valid then return {} end
+  local storages = network.storages
+  if not storages or #storages == 0 then return {} end
+  local list = {}
+  for _, entity in ipairs(storages) do
+    if entity.valid then
+      list[#list + 1] = entity
+    end
+  end
+  local x, y = from_position.x, from_position.y
+  table.sort(list, function(a, b)
+    local da = (a.position.x - x) ^ 2 + (a.position.y - y) ^ 2
+    local db = (b.position.x - x) ^ 2 + (b.position.y - y) ^ 2
+    return da < db
+  end)
+  return list
+end
+
+--- Move robot's cargo into the nearest storage chest(s). Returns true if any items were moved.
+local function deliver_robot_cargo_to_nearest_storage(robot)
+  if not robot or not robot.valid then return false end
+  local cargo = robot.get_inventory(defines.inventory.robot_cargo)
+  if not cargo then return false end
+  local contents = cargo.get_contents()
+  if not contents or next(contents) == nil then return false end
+
+  local network = robot.logistic_network
+  local storages = get_storages_sorted_by_distance(network, robot.position)
+  if #storages == 0 then return false end
+
+  local moved = false
+  for name, count in pairs(contents) do
+    local remaining = count
+    for i = 1, #storages do
+      if remaining <= 0 then break end
+      local chest = storages[i]
+      if not chest.valid then goto continue end
+      local inv = chest.get_inventory(defines.inventory.chest)
+      if not inv then goto continue end
+      local inserted = inv.insert({ name = name, count = remaining })
+      if inserted > 0 then
+        cargo.remove({ name = name, count = inserted })
+        remaining = remaining - inserted
+        moved = true
+      end
+      ::continue::
+    end
+  end
+  return moved
 end
 
 local function on_robot_mined(event)
@@ -29,7 +74,7 @@ local function on_robot_mined(event)
   global.redirect_queue = global.redirect_queue or {}
   table.insert(global.redirect_queue, {
     robot = robot,
-    apply_tick = event.tick + REDIRECT_DELAY_TICKS
+    apply_tick = event.tick + DELAY_TICKS
   })
 end
 
@@ -39,7 +84,7 @@ local function on_tick(event)
   for i = #queue, 1, -1 do
     local entry = queue[i]
     if entry.apply_tick <= event.tick then
-      force_robot_to_nearest_storage(entry.robot)
+      deliver_robot_cargo_to_nearest_storage(entry.robot)
       table.remove(queue, i)
     end
   end
@@ -58,5 +103,4 @@ script.on_event(defines.events.on_tick, on_tick)
 
 script.on_event(defines.events.on_runtime_mod_setting_changed, function(event)
   if event.setting ~= "robots-configurable-behavior-redirect-to-nearest-storage" then return end
-  -- No state to update; next mined entity will respect new value
 end)
